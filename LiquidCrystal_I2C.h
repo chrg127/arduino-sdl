@@ -1,5 +1,7 @@
 #pragma once
 
+#include "arduino_string.h"
+
 struct LiquidCrystal_I2C {
     int a, b, c;
 

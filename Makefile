@@ -1,5 +1,5 @@
-files := arduino_sdl.cpp.o catch_ball_states.cpp.o
-CXXFLAGS := -g -Wall -Wextra -Wno-unused-parameter -std=c++20
+files := arduino_sdl.cpp.o arduino_string.cpp.o LiquidCrystal_I2C.cpp.o
+CXXFLAGS := -g -I. -Wall -Wextra -Wno-unused-parameter -std=c++20
 LDLIBS := -lSDL2
 
 all: program
