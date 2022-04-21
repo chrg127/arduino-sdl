@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "arduino_string.h"
 
 #define HIGH 0x1
 #define LOW  0x0
@@ -57,28 +58,6 @@ const uint8_t A2 = 16;
 const uint8_t A3 = 17;
 const uint8_t A4 = 18;
 const uint8_t A5 = 19;
-
-class String {
-    char *start, *end;
-
-public:
-    String();
-    String(const String &s);
-    String(String &&s);
-    String & operator=(const String &s);
-    String & operator=(String &&s);
-    explicit String(const char *s);
-    String(int n, int base = 10);
-    ~String();
-
-    unsigned int length() const { return end - start; }
-    const char *data() const { return start; }
-    void construct(const char *s, unsigned int len);
-};
-
-String operator+(const String &lhs, const String &rhs);
-String operator+(const String &lhs, const char *rhs);
-String operator+(const char *lhs, const String &rhs);
 
 struct HardwareSerial {
     void begin(int baud);
