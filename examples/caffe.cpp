@@ -1,5 +1,7 @@
 #include <LiquidCrystal_I2C.h>
 
+#include "arduino_sdl.h"
+
 enum class State {
     Welcome,
     Ready,
@@ -25,7 +27,6 @@ const int TEMP_MAX      = 24;
 // servo        - simulate machine movements
 // temp sensor  - temperature
 
-
 const int BUTTON_PINS[] = { 0, 1, 2 };
 const int SONAR_ECHO_PIN = 3;
 const int SONAR_TRIG_PIN = 4;
@@ -42,18 +43,20 @@ const int MAX_PRODUCTS = 10;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 struct {
-    int start;
+    int state_start;
     State state;
 
     int last_pir_trig;
 
     void start(State st) {
         state = st;
-        start = millis();
+        state_start = millis();
 
         switch (state) {
         case State::Ready:
             last_pir_trig = millis();
+            break;
+        default:
             break;
         }
     }
@@ -61,7 +64,7 @@ struct {
     void end() {
     }
 
-    void time() { return millis() - start; }
+    int time() { return millis() - state_start; }
 } state_machine;
 
 struct Machine {
@@ -84,7 +87,7 @@ void setup() {
     pinMode(PIR_PIN, INPUT);
     Serial.begin(9600);
     lcd.begin();
-    machine.state_start = 0;
+    state_machine.state_start = 0;
     state_machine.state = State::Welcome;
 }
 
@@ -106,27 +109,26 @@ void welcome() {
 }
 
 bool button_checker(int n) {
+    static String product_string[] = { "Coffee", "Chocolate", "Tea" };
     if (button_pressed(n)) {
         int inc = n == 0 ? 1 : -1;
         machine.cur_product = (machine.cur_product + inc) % 3;
         lcd_write(String("Selected") + product_string[machine.cur_product]);
         delay(36);
-        returrn true;
+        return true;
     }
-    returrn false;
+    return false;
 }
 
+bool detect_users() { return true; }
+
 void ready() {
-    static String product_string[] = { "Coffee", "Chocolate", "Tea" };
     static int button_time = 0;
 
     if (button_time <= 0)
         lcd_write("ready");
 
-    // dai rizzi prova a capire questo
     button_time = button_checker(0) || button_checker(1) ? 5000 : (button_time > 0 ? button_time - 10 : 0);
-
-
 
     if (detect_users())
         state_machine.last_pir_trig = millis();
@@ -148,4 +150,9 @@ void loop() {
     case State::Sleep: break;
     }
     delay(10);
+}
+
+int main(void)
+{
+    return 0;
 }
