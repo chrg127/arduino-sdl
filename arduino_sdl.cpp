@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <ctime>
 #include <charconv>
 #include <memory>
@@ -10,49 +11,13 @@
 #include <SDL2/SDL.h>
 #include <glm/glm.hpp>
 #include "arduino_sdl.h"
+#include "LiquidCrystal_I2C.h"
 
 #define FWD(...) std::forward<decltype(__VA_ARGS__)>(__VA_ARGS__)
 
+using u32 = uint32_t;
 using glm::vec2;
 
-enum {
-    TEXTURE_GREEN_LED,
-    TEXTURE_RED_LED,
-    TEXTURE_BUTTON,
-    TEXTURE_POTENTIOMETER,
-};
-
-struct Component {
-    vec2 pos;
-    int id;
-    int frame;
-
-    explicit Component(vec2 position, int tex_id, int frame_no)
-        : pos{position}, id{tex_id}, frame{frame_no}
-    { }
-
-    virtual int  digital_read()  = 0;
-    virtual void digital_write(uint8_t value) = 0;
-    virtual int  analog_read()   = 0;
-    virtual void analog_write(uint8_t value)  = 0;
-    virtual void mouse_click(vec2 mouse_pos, bool pressed) = 0;
-    virtual void mouse_wheel(vec2 mouse_pos, bool up_or_down) = 0;
-};
-
-struct LED : public Component {
-    explicit LED(vec2 pos, arduino_sdl::LedColor color)
-        : Component(pos, color == arduino_sdl::LedColor::Green ? TEXTURE_GREEN_LED : TEXTURE_RED_LED, 4)
-    { }
-
-    int  digital_read()               override { return 0; }
-    void digital_write(uint8_t value) override { frame = value == LOW ? 0 : 7; }
-    int  analog_read()                override { return 0; }
-    void analog_write(uint8_t value)  override { frame = value / 32; }
-    void mouse_click(vec2 mouse_pos, bool pressed)  override { }
-    void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
-};
-
-// used by Button
 struct Rect {
     vec2 pos;
     vec2 size;
@@ -64,44 +29,47 @@ bool collision_rect_point(Rect r, vec2 p)
         && p.y >= r.pos.y && p.y <= r.pos.y + r.size.y;
 }
 
-struct Button : public Component {
-    bool pressed = false;
-
-    explicit Button(vec2 pos) : Component(pos, TEXTURE_BUTTON, 0) { }
-
-    int  digital_read()               override { return pressed ? HIGH : LOW; }
-    void digital_write(uint8_t value) override { }
-    int  analog_read()                override { return 0; }
-    void analog_write(uint8_t value)  override { }
-    void mouse_click(vec2 mouse_pos, bool button_pressed)  override
-    {
-        bool inside = collision_rect_point({ .pos = this->pos, .size = {32,32} }, mouse_pos);
-        pressed = inside ? button_pressed : false;
-        frame = pressed;
-    }
-    void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
-};
-
-struct Potentiometer : public Component {
-    int value = 0;
-
-    explicit Potentiometer(vec2 pos) : Component(pos, TEXTURE_POTENTIOMETER, 0) { }
-
-    int  digital_read()               override { return 0; }
-    void digital_write(uint8_t value) override { }
-    int  analog_read()                override { return value; }
-    void analog_write(uint8_t value)  override { }
-    void mouse_click(vec2 mouse_pos, bool pressed)  override { }
-
-    void mouse_wheel(vec2 mouse_pos, bool up_or_down) override
-    {
-        bool inside = collision_rect_point({ .pos = this->pos, .size = {32,32} }, mouse_pos);
-        if (inside) {
-            value += (up_or_down ? 1 : -1) * 64;
-            value = value > 1023 ? 1023 : value < 0 ? 0 : value;
-            frame = value / 128;
+void circle_rasterizer(float cx, float cy, float r, auto &&draw)
+{
+    float x1 = cx - r, y1 = cy - r,
+          x2 = cx + r, y2 = cy + r;
+    for (auto y = y1; y < y2; y++) {
+        for (auto x = x1; x < x2; x++) {
+            auto xdist = x - cx + 0.5f,
+                 ydist = y - cy + 0.5f;
+            auto dist2 = xdist*xdist + ydist*ydist;
+            if (dist2 <= r*r)
+                draw(x, y);
         }
     }
+}
+
+auto rgba_to_components(u32 color)
+{
+    return std::tuple{ color >> 24 & 0xff, color >> 16 & 0xff, color >> 8 & 0xff, color & 0xff };
+}
+
+u32 components_to_rgba(int b, int g, int r, int a) { return b << 24 | g << 16 | r << 8 | a; }
+
+
+
+enum class GFXType { Rect, Circle, Texture };
+
+enum {
+    TEXTURE_GREEN_LED,
+    TEXTURE_RED_LED,
+    TEXTURE_BUTTON,
+    TEXTURE_POTENTIOMETER,
+};
+
+struct Component {
+    virtual int  digital_read()  = 0;
+    virtual void digital_write(uint8_t value) = 0;
+    virtual int  analog_read()   = 0;
+    virtual void analog_write(uint8_t value)  = 0;
+    virtual void mouse_click(vec2 mouse_pos, bool pressed) = 0;
+    virtual void mouse_wheel(vec2 mouse_pos, bool up_or_down) = 0;
+    virtual void draw() = 0;
 };
 
 struct ArduinoBoard {
@@ -155,9 +123,11 @@ struct {
     }
 } gfx_handler;
 
+
+
 namespace {
 
-void update()
+void poll()
 {
     for (SDL_Event ev; SDL_PollEvent(&ev); ) {
         switch (ev.type) {
@@ -195,13 +165,21 @@ void draw_frame(vec2 pos, int gfx_id, int frame)
     SDL_RenderCopy(SDL.rd, tex.data, &src, &dst);
 }
 
+void draw_circle(vec2 pos, float radius, unsigned color)
+{
+    circle_rasterizer(pos.x, pos.y, radius, [&](float x, float y) {
+        auto [r, g, b, a] = rgba_to_components(color);
+        SDL_SetRenderDrawColor(SDL.rd, r, g, b, a);
+        SDL_RenderDrawPoint(SDL.rd, int(x), int(y));
+    });
+}
+
 void draw()
 {
     SDL_SetRenderDrawColor(SDL.rd, 0, 0, 0, 0xff);
     SDL_RenderClear(SDL.rd);
     for (auto &c : board.components)
-        if (c->id != -1)
-            draw_frame(c->pos, c->id, c->frame);
+        c->draw();
     SDL_RenderPresent(SDL.rd);
 }
 
@@ -215,6 +193,129 @@ int load_gfx(std::string_view pathname, vec2 frame_size)
 }
 
 } // namespace
+
+
+
+struct LED : public Component {
+    vec2 pos;
+    u32 color;
+
+    explicit LED(vec2 pos, u32 color) : pos{pos}, color{color} { }
+    int  digital_read()               override { return 0; }
+    void digital_write(uint8_t value) override { } //frame = value == LOW ? 0 : 7; }
+    int  analog_read()                override { return 0; }
+    void analog_write(uint8_t value)  override { } //frame = value / 32; }
+    void mouse_click(vec2 mouse_pos, bool pressed)  override { }
+    void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
+
+    void draw()
+    {
+        draw_circle(pos - vec2{16.f, 16.f}, 16.f, color);
+    }
+};
+
+struct Button : public Component {
+    vec2 pos;
+    bool pressed = false;
+
+    explicit Button(vec2 pos) : pos{pos} {}
+
+    int  digital_read()               override { return pressed ? HIGH : LOW; }
+    void digital_write(uint8_t value) override { }
+    int  analog_read()                override { return 0; }
+    void analog_write(uint8_t value)  override { }
+    void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
+
+    void mouse_click(vec2 mouse_pos, bool button_pressed)  override
+    {
+        bool inside = collision_rect_point({ .pos = pos, .size = {32,32} }, mouse_pos);
+        pressed = inside ? button_pressed : false;
+    }
+
+    void draw()
+    {
+        draw_frame(pos, TEXTURE_BUTTON, int(pressed));
+    }
+};
+
+struct Potentiometer : public Component {
+    vec2 pos;
+    int value = 0;
+
+    explicit Potentiometer(vec2 pos) : pos{pos} {}
+
+    int  digital_read()               override { return 0; }
+    void digital_write(uint8_t value) override { }
+    int  analog_read()                override { return value; }
+    void analog_write(uint8_t value)  override { }
+    void mouse_click(vec2 mouse_pos, bool pressed)  override { }
+
+    void mouse_wheel(vec2 mouse_pos, bool up_or_down) override
+    {
+        bool inside = collision_rect_point({ .pos = pos, .size = {32,32} }, mouse_pos);
+        if (inside) {
+            value += (up_or_down ? 1 : -1) * 64;
+            value = value > 1023 ? 1023 : value < 0 ? 0 : value;
+            // frame = value / 128;
+        }
+    }
+
+    void draw()
+    {
+        draw_frame(pos, TEXTURE_POTENTIOMETER, value / 128);
+    }
+};
+
+// struct PIR : public Component {
+//     int  digital_read()               override { return 0; }
+//     void digital_write(uint8_t value) override { }
+//     int  analog_read()                override { return 0; }
+//     void analog_write(uint8_t value)  override { }
+//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
+//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
+    // void draw() {}
+// };
+
+// struct Sonar : public Component {
+//     int  digital_read()               override { return 0; }
+//     void digital_write(uint8_t value) override { }
+//     int  analog_read()                override { return 0; }
+//     void analog_write(uint8_t value)  override { }
+//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
+//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
+    // void draw() {}
+// };
+
+// struct Servo : public Component {
+//     int  digital_read()               override { return 0; }
+//     void digital_write(uint8_t value) override { }
+//     int  analog_read()                override { return 0; }
+//     void analog_write(uint8_t value)  override { }
+//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
+//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
+    // void draw() {}
+// };
+
+// struct TemperatureSensor : public Component {
+//     int  digital_read()               override { return 0; }
+//     void digital_write(uint8_t value) override { }
+//     int  analog_read()                override { return 0; }
+//     void analog_write(uint8_t value)  override { }
+//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
+//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
+    // void draw() {}
+// };
+
+// struct LCD : public Component {
+//     int  digital_read()               override { return 0; }
+//     void digital_write(uint8_t value) override { }
+//     int  analog_read()                override { return 0; }
+//     void analog_write(uint8_t value)  override { }
+//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
+//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
+    // void draw() {}
+// };
+
 
 
 /* the stuff defined in the header file start here */
@@ -239,7 +340,7 @@ unsigned long millis()
 
 void delay(unsigned long ms)
 {
-    update();
+    poll();
     draw();
     SDL_Delay(ms);
 }
@@ -270,6 +371,24 @@ long map(long x, long in_min, long in_max, long out_min, long out_max)
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
+
+
+/* LiquidCrystal_I2C stuff */
+
+LiquidCrystal_I2C::LiquidCrystal_I2C(int a, int b, int c)
+    : a{a}, b{b}, c{c}
+{ }
+
+void LiquidCrystal_I2C::begin() {}
+
+void LiquidCrystal_I2C::clear() {}
+
+void LiquidCrystal_I2C::setCursor(int x, int y) {}
+
+void LiquidCrystal_I2C::print(String s) {}
+
+
+
 namespace arduino_sdl {
 
 void start(const char *title, int width, int height)
@@ -277,8 +396,8 @@ void start(const char *title, int width, int height)
     SDL.init(title, width, height);
     std::srand(std::time(nullptr));
 
-    load_gfx("led_green.bmp", {32, 32});
-    load_gfx("led_red.bmp",   {32, 32});
+    // load_gfx("led_green.bmp", {32, 32});
+    // load_gfx("led_red.bmp",   {32, 32});
     load_gfx("button.bmp",    {32, 32});
     load_gfx("pot.bmp",       {32, 32});
 }
@@ -287,7 +406,7 @@ void loop()
 {
     setup();
     while (SDL.running) {
-        update();
+        poll();
         ::loop();
         draw();
     }
@@ -304,7 +423,7 @@ void connect_component(int pin, auto... args)
     board.ports[pin] = board.push_component<T>(FWD(args)...);
 }
 
-void connect_led(int pin, int x, int y, LedColor color) { connect_component<LED>(pin, vec2{x,y}, color); }
+void connect_led(int pin, int x, int y, unsigned color) { connect_component<LED>(pin, vec2{x,y}, color); }
 void connect_button(int pin, int x, int y)              { connect_component<Button>(pin, vec2{x,y}); }
 void connect_potentiometer(int pin, int x, int y)       { connect_component<Potentiometer>(pin, vec2{x,y}); }
 
