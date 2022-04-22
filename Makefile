@@ -1,21 +1,24 @@
-files := arduino_sdl.cpp.o arduino_string.cpp.o LiquidCrystal_I2C.cpp.o
-CXXFLAGS := -g -I. -Wall -Wextra -Wno-unused-parameter -std=c++20
-LDLIBS := -lSDL2
+CXXFLAGS := -g -Isrc -Wall -Wextra -Wno-unused-parameter -std=c++20
+LDLIBS   := -lSDL2
+VPATH    := src:examples
+outdir 	 := out
+_files   := arduino_sdl.cpp arduino_string.cpp LiquidCrystal_I2C.cpp catchball.cpp
+files 	 := $(patsubst %,$(outdir)/%.o,$(_files))
 
-all: program
+all: $(outdir)/program
 
-program: $(files) images
+$(outdir)/program: $(files) images
 	$(CXX) $(files) -o $@ $(LDLIBS)
 
-%.bmp: %.png
+$(outdir)/%.bmp: %.png
 	convert $< $@
 
-%.cpp.o: %.cpp
+$(outdir)/%.cpp.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 .PHONY: images clean
 
-images: led_green.bmp led_red.bmp button.bmp pot.bmp
+images: $(outdir)/led_green.bmp $(outdir)/led_red.bmp $(outdir)/button.bmp $(outdir)/pot.bmp
 
 clean:
 	rm *.bmp *.o program
