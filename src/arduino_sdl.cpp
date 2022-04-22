@@ -51,13 +51,18 @@ auto rgba_to_components(u32 color)
 
 u32 components_to_rgba(int b, int g, int r, int a) { return b << 24 | g << 16 | r << 8 | a; }
 
+u32 lerp_rgba(u32 min, u32 max, float t)
+{
+    auto [r1, g1, b1, a1] = rgba_to_components(min);
+    auto [r2, g2, b2, a2] = rgba_to_components(max);
+    return components_to_rgba(std::lerp(r1, r2, t),
+                              std::lerp(g1, g2, t),
+                              std::lerp(b1, b2, t),
+                              std::lerp(a1, a2, t));
+}
 
-
-enum class GFXType { Rect, Circle, Texture };
 
 enum {
-    TEXTURE_GREEN_LED,
-    TEXTURE_RED_LED,
     TEXTURE_BUTTON,
     TEXTURE_POTENTIOMETER,
 };
@@ -198,19 +203,22 @@ int load_gfx(std::string_view pathname, vec2 frame_size)
 
 struct LED : public Component {
     vec2 pos;
-    u32 color;
+    u32 color_min;
+    u32 color_max;
+    uint8_t val = 0;
 
-    explicit LED(vec2 pos, u32 color) : pos{pos}, color{color} { }
+    explicit LED(vec2 pos, u32 min, u32 max) : pos{pos}, color_min{min}, color_max{max} {}
     int  digital_read()               override { return 0; }
-    void digital_write(uint8_t value) override { } //frame = value == LOW ? 0 : 7; }
+    // assume we only pass LOW (0) or HIGH (1) to digital_write
+    void digital_write(uint8_t value) override { val = value * 255; }
     int  analog_read()                override { return 0; }
-    void analog_write(uint8_t value)  override { } //frame = value / 32; }
+    void analog_write(uint8_t value)  override { val = value; }
     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
 
     void draw()
     {
-        draw_circle(pos - vec2{16.f, 16.f}, 16.f, color);
+        draw_circle(pos + vec2{16.f, 1.6f}, 16.f, lerp_rgba(color_min, color_max, val / 255.f));
     }
 };
 
@@ -423,7 +431,7 @@ void connect_component(int pin, auto... args)
     board.ports[pin] = board.push_component<T>(FWD(args)...);
 }
 
-void connect_led(int pin, int x, int y, unsigned color) { connect_component<LED>(pin, vec2{x,y}, color); }
+void connect_led(int pin, int x, int y, u32 min, u32 max) { connect_component<LED>(pin, vec2{x,y}, min, max); }
 void connect_button(int pin, int x, int y)              { connect_component<Button>(pin, vec2{x,y}); }
 void connect_potentiometer(int pin, int x, int y)       { connect_component<Potentiometer>(pin, vec2{x,y}); }
 

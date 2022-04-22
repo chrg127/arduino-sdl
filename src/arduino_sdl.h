@@ -106,7 +106,7 @@ enum class PinType {
     Analog, Digital
 };
 
-void connect_led(int pin, int x, int y, unsigned color);
+void connect_led(int pin, int x, int y, unsigned color_min, unsigned color_max);
 void connect_button(int pin, int x, int y);
 void connect_potentiometer(int pin, int x, int y);
 
