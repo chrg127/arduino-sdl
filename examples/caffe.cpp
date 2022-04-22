@@ -154,5 +154,11 @@ void loop() {
 
 int main(void)
 {
+    arduino_sdl::start("Macchina del Caffè", 800, 600);
+    arduino_sdl::connect_button(BUTTON_PINS[0], 100, 100);
+    arduino_sdl::connect_button(BUTTON_PINS[1], 100, 200);
+    arduino_sdl::connect_button(BUTTON_PINS[2], 150, 150);
+    arduino_sdl::loop();
+    arduino_sdl::quit();
     return 0;
 }

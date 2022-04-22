@@ -138,11 +138,11 @@ int main()
 
     int x = 400;
     for (auto pin : leds) {
-        arduino_sdl::connect_led(pin, x, 300, arduino_sdl::LedColor::Green);
+        arduino_sdl::connect_led(pin, x, 300, 0x00ff00ff);
         x += 64;
     }
 
-    arduino_sdl::connect_led(LS, 100, 100, arduino_sdl::LedColor::Red);
+    arduino_sdl::connect_led(LS, 100, 100, 0xff0000ff);
 
     x = 400;
     for (auto pin : buttons) {
