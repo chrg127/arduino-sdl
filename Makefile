@@ -1,13 +1,16 @@
-CXXFLAGS := -g -Isrc -Wall -Wextra -Wno-unused-parameter -std=c++20
-LDLIBS   := -lSDL2
+CXXFLAGS := -g -Isrc -Wall -Wextra -Wno-unused-parameter -std=c++20 \
+			$(shell pkg-config --cflags sdl2 SDL2_ttf)
+LDLIBS   := $(shell pkg-config --libs sdl2 SDL2_ttf)
 VPATH    := src:examples
 outdir 	 := out
-_files   := arduino_sdl.cpp arduino_string.cpp LiquidCrystal_I2C.cpp catchball.cpp
+_files   := arduino_sdl.cpp arduino_string.cpp LiquidCrystal_I2C.cpp caffe.cpp
 files 	 := $(patsubst %,$(outdir)/%.o,$(_files))
+_images   := button pot lcd1 font
+images  := $(patsubst %,$(outdir)/%.bmp,$(_images))
 
 all: $(outdir)/program
 
-$(outdir)/program: $(files) images
+$(outdir)/program: $(outdir) $(files) $(images)
 	$(CXX) $(files) -o $@ $(LDLIBS)
 
 $(outdir)/%.bmp: %.png
@@ -16,9 +19,10 @@ $(outdir)/%.bmp: %.png
 $(outdir)/%.cpp.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-.PHONY: images clean
+$(outdir):
+	mkdir -p $@
 
-images: $(outdir)/led_green.bmp $(outdir)/led_red.bmp $(outdir)/button.bmp $(outdir)/pot.bmp
+.PHONY: clean
 
 clean:
-	rm *.bmp *.o program
+	rm -r $(outdir)

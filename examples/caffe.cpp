@@ -86,7 +86,7 @@ void setup() {
     pinMode(SERVO_PIN, OUTPUT);
     pinMode(PIR_PIN, INPUT);
     Serial.begin(9600);
-    lcd.begin();
+    lcd.init();
     state_machine.state_start = 0;
     state_machine.state = State::Welcome;
 }

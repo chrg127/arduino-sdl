@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -5,12 +6,15 @@
 #include <ctime>
 #include <charconv>
 #include <memory>
-#include <utility>
+#include <functional>
 #include <vector>
-#include <array>
+#include <unordered_map>
+#include <utility>
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 #include <glm/glm.hpp>
 #include "arduino_sdl.h"
+#include "Wire.h"
 #include "LiquidCrystal_I2C.h"
 
 #define FWD(...) std::forward<decltype(__VA_ARGS__)>(__VA_ARGS__)
@@ -65,13 +69,15 @@ u32 lerp_rgba(u32 min, u32 max, float t)
 enum {
     TEXTURE_BUTTON,
     TEXTURE_POTENTIOMETER,
+    TEXTURE_LCD,
+    TEXTURE_FONT,
 };
 
 struct Component {
-    virtual int  digital_read()  = 0;
-    virtual void digital_write(uint8_t value) = 0;
-    virtual int  analog_read()   = 0;
-    virtual void analog_write(uint8_t value)  = 0;
+    virtual int  digital_read(uint8_t pin) = 0;
+    virtual void digital_write(uint8_t pin, uint8_t value) = 0;
+    virtual int  analog_read(uint8_t pin) = 0;
+    virtual void analog_write(uint8_t pin, uint8_t value) = 0;
     virtual void mouse_click(vec2 mouse_pos, bool pressed) = 0;
     virtual void mouse_wheel(vec2 mouse_pos, bool up_or_down) = 0;
     virtual void draw() = 0;
@@ -80,12 +86,18 @@ struct Component {
 struct ArduinoBoard {
     std::vector<std::unique_ptr<Component>> components;
     std::array<int, 20> ports;
+    std::unordered_map<uint8_t, std::function<void(uint8_t)>> i2c_bus;
 
     template <typename T>
-    int push_component(auto... args)
+    int push_component(auto&&... args)
     {
         components.emplace_back(std::make_unique<T>(FWD(args)...));
         return components.size() - 1;
+    }
+
+    void add_i2c(uint8_t addr, auto &&fn)
+    {
+        i2c_bus[addr] = fn;
     }
 } board;
 
@@ -170,6 +182,19 @@ void draw_frame(vec2 pos, int gfx_id, int frame)
     SDL_RenderCopy(SDL.rd, tex.data, &src, &dst);
 }
 
+void draw_character(vec2 pos, char c)
+{
+    int x = int(c) % 16;
+    int y = int(c) / 16;
+    auto &tex = gfx_handler[TEXTURE_FONT];
+    SDL_Rect src = {     x * 32,     y * 32, 32, 32 };
+    SDL_Rect dst = { int(pos.x), int(pos.y), 32, 32 };
+    SDL_RenderCopy(SDL.rd, tex.data, &src, &dst);
+    // SDL_SetRenderDrawColor(SDL.rd, 0xff, 0, 0, 0xff);
+    // SDL_Rect r = { int(pos.x), int(pos.y), 32, 32 };
+    // SDL_RenderDrawRect(SDL.rd, &r);
+}
+
 void draw_circle(vec2 pos, float radius, unsigned color)
 {
     circle_rasterizer(pos.x, pos.y, radius, [&](float x, float y) {
@@ -208,15 +233,15 @@ struct LED : public Component {
     uint8_t val = 0;
 
     explicit LED(vec2 pos, u32 min, u32 max) : pos{pos}, color_min{min}, color_max{max} {}
-    int  digital_read()               override { return 0; }
+    int  digital_read(uint8_t)                 override { return 0; }
     // assume we only pass LOW (0) or HIGH (1) to digital_write
-    void digital_write(uint8_t value) override { val = value * 255; }
-    int  analog_read()                override { return 0; }
-    void analog_write(uint8_t value)  override { val = value; }
+    void digital_write(uint8_t, uint8_t value) override { val = value * 255; }
+    int  analog_read(uint8_t)                  override { return 0; }
+    void analog_write(uint8_t, uint8_t value)  override { val = value; }
     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
 
-    void draw()
+    void draw() override
     {
         draw_circle(pos + vec2{16.f, 1.6f}, 16.f, lerp_rgba(color_min, color_max, val / 255.f));
     }
@@ -228,10 +253,10 @@ struct Button : public Component {
 
     explicit Button(vec2 pos) : pos{pos} {}
 
-    int  digital_read()               override { return pressed ? HIGH : LOW; }
-    void digital_write(uint8_t value) override { }
-    int  analog_read()                override { return 0; }
-    void analog_write(uint8_t value)  override { }
+    int  digital_read(uint8_t)                 override { return pressed ? HIGH : LOW; }
+    void digital_write(uint8_t, uint8_t value) override { }
+    int  analog_read(uint8_t)                  override { return 0; }
+    void analog_write(uint8_t, uint8_t value)  override { }
     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
 
     void mouse_click(vec2 mouse_pos, bool button_pressed)  override
@@ -240,7 +265,7 @@ struct Button : public Component {
         pressed = inside ? button_pressed : false;
     }
 
-    void draw()
+    void draw() override
     {
         draw_frame(pos, TEXTURE_BUTTON, int(pressed));
     }
@@ -252,10 +277,10 @@ struct Potentiometer : public Component {
 
     explicit Potentiometer(vec2 pos) : pos{pos} {}
 
-    int  digital_read()               override { return 0; }
-    void digital_write(uint8_t value) override { }
-    int  analog_read()                override { return value; }
-    void analog_write(uint8_t value)  override { }
+    int  digital_read(uint8_t)                 override { return 0; }
+    void digital_write(uint8_t, uint8_t value) override { }
+    int  analog_read(uint8_t)                  override { return value; }
+    void analog_write(uint8_t, uint8_t value)  override { }
     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
 
     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override
@@ -268,7 +293,7 @@ struct Potentiometer : public Component {
         }
     }
 
-    void draw()
+    void draw() override
     {
         draw_frame(pos, TEXTURE_POTENTIOMETER, value / 128);
     }
@@ -281,48 +306,54 @@ struct Potentiometer : public Component {
 //     void analog_write(uint8_t value)  override { }
 //     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
 //     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
-    // void draw() {}
+//     void draw() override {}
 // };
 
-// struct Sonar : public Component {
-//     int  digital_read()               override { return 0; }
-//     void digital_write(uint8_t value) override { }
-//     int  analog_read()                override { return 0; }
-//     void analog_write(uint8_t value)  override { }
-//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
-//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
-    // void draw() {}
-// };
+struct LCD : public Component {
+    vec2 pos, size;
+    uint8_t sda, scl;
+    std::vector<char> char_buf;
 
-// struct Servo : public Component {
-//     int  digital_read()               override { return 0; }
-//     void digital_write(uint8_t value) override { }
-//     int  analog_read()                override { return 0; }
-//     void analog_write(uint8_t value)  override { }
-//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
-//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
-    // void draw() {}
-// };
+    LCD(vec2 pos, vec2 size, uint8_t addr, uint8_t sda, uint8_t scl)
+        : pos{pos}, size{size}, sda{sda}, scl{scl}
+    {
+        board.add_i2c(addr, [&](uint8_t val) {});
+        char_buf = std::vector(size.x * size.y, '1');
+    }
 
-// struct TemperatureSensor : public Component {
-//     int  digital_read()               override { return 0; }
-//     void digital_write(uint8_t value) override { }
-//     int  analog_read()                override { return 0; }
-//     void analog_write(uint8_t value)  override { }
-//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
-//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
-    // void draw() {}
-// };
+    int  digital_read(uint8_t)                 override { return 0; }
+    void digital_write(uint8_t, uint8_t value) override { }
+    int  analog_read(uint8_t)                  override { return 0; }
+    void analog_write(uint8_t, uint8_t value)  override { }
 
-// struct LCD : public Component {
-//     int  digital_read()               override { return 0; }
-//     void digital_write(uint8_t value) override { }
-//     int  analog_read()                override { return 0; }
-//     void analog_write(uint8_t value)  override { }
-//     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
-//     void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
-    // void draw() {}
-// };
+    void mouse_click(vec2 mouse_pos, bool pressed)  override { }
+    void mouse_wheel(vec2 mouse_pos, bool up_or_down) override { }
+
+    void draw() override
+    {
+        draw_frame(pos,                                   TEXTURE_LCD, 0);
+        draw_frame(pos + vec2{size.x+1,        0} * 32.f, TEXTURE_LCD, 1);
+        draw_frame(pos + vec2{       0, size.y+1} * 32.f, TEXTURE_LCD, 2);
+        draw_frame(pos + vec2{size.x+1, size.y+1} * 32.f, TEXTURE_LCD, 3);
+
+        for (auto i = 0u; i < size.x; i++) {
+            draw_frame(pos + vec2{i+1,        0} * 32.f, TEXTURE_LCD, 4);
+            draw_frame(pos + vec2{i+1, size.y+1} * 32.f, TEXTURE_LCD, 5);
+        }
+
+        for (auto i = 0u; i < size.y; i++) {
+            draw_frame(pos + vec2{       0, i+1} * 32.f, TEXTURE_LCD, 6);
+            draw_frame(pos + vec2{size.x+1, i+1} * 32.f, TEXTURE_LCD, 7);
+        }
+
+        // draw lcd text
+        for (auto y = 0u; y < size.y; y++) {
+            for (auto x = 0u; x < size.x; x++) {
+                draw_character(pos + vec2{x+1,y+1} * 32.f, char_buf[y * size.x + x]);
+            }
+        }
+    }
+};
 
 
 
@@ -336,10 +367,10 @@ void HardwareSerial::println(int n)             { printf("%d\n", n); }
 HardwareSerial Serial;
 
 void pinMode(uint8_t pin, uint8_t value) { }
-int digitalRead(uint8_t pin)                  { return board.components[board.ports[pin]]->digital_read(); }
-int analogRead(uint8_t pin)                   { return board.components[board.ports[pin]]->analog_read(); }
-void digitalWrite(uint8_t pin, uint8_t value) { board.components[board.ports[pin]]->digital_write(value); }
-void analogWrite(uint8_t pin, uint8_t value)  { board.components[board.ports[pin]]->analog_write(value); }
+int digitalRead(uint8_t pin)                  { return board.components[board.ports[pin]]->digital_read(pin); }
+int analogRead(uint8_t pin)                   { return board.components[board.ports[pin]]->analog_read(pin); }
+void digitalWrite(uint8_t pin, uint8_t value) { board.components[board.ports[pin]]->digital_write(pin, value); }
+void analogWrite(uint8_t pin, uint8_t value)  { board.components[board.ports[pin]]->analog_write(pin, value); }
 
 unsigned long millis()
 {
@@ -381,18 +412,25 @@ long map(long x, long in_min, long in_max, long out_min, long out_max)
 
 
 
+/* Wire stuff */
+
+void _wire::write(uint8_t data)
+{
+    board.i2c_bus[cur_addr](data);
+}
+
+
+
 /* LiquidCrystal_I2C stuff */
 
-LiquidCrystal_I2C::LiquidCrystal_I2C(int a, int b, int c)
-    : a{a}, b{b}, c{c}
+LiquidCrystal_I2C::LiquidCrystal_I2C(uint8_t addr, uint8_t cols, uint8_t rows)
+    : addr{addr}, cols{cols}, rows{rows}
 { }
 
-void LiquidCrystal_I2C::begin() {}
-
+void LiquidCrystal_I2C::init() {}
+void LiquidCrystal_I2C::backlight() {}
 void LiquidCrystal_I2C::clear() {}
-
 void LiquidCrystal_I2C::setCursor(int x, int y) {}
-
 void LiquidCrystal_I2C::print(String s) {}
 
 
@@ -403,11 +441,10 @@ void start(const char *title, int width, int height)
 {
     SDL.init(title, width, height);
     std::srand(std::time(nullptr));
-
-    // load_gfx("led_green.bmp", {32, 32});
-    // load_gfx("led_red.bmp",   {32, 32});
     load_gfx("button.bmp",    {32, 32});
     load_gfx("pot.bmp",       {32, 32});
+    load_gfx("lcd1.bmp",      {32, 32});
+    load_gfx("font.bmp",      {32, 32});
 }
 
 void loop()
@@ -434,5 +471,12 @@ void connect_component(int pin, auto... args)
 void connect_led(int pin, int x, int y, u32 min, u32 max) { connect_component<LED>(pin, vec2{x,y}, min, max); }
 void connect_button(int pin, int x, int y)              { connect_component<Button>(pin, vec2{x,y}); }
 void connect_potentiometer(int pin, int x, int y)       { connect_component<Potentiometer>(pin, vec2{x,y}); }
+
+void connect_lcd(uint8_t addr, uint8_t sda, uint8_t scl, int x, int y, int r, int c)
+{
+    int i = board.push_component<LCD>(vec2{x, y}, vec2{r, c}, addr, sda, scl);
+    board.ports[sda] = i;
+    board.ports[scl] = i;
+}
 
 } // namespace arduino_sdl
