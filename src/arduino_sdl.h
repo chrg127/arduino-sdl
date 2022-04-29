@@ -111,4 +111,4 @@ void connect_button(int pin, int x, int y);
 void connect_potentiometer(int pin, int x, int y);
 void connect_lcd(uint8_t addr, uint8_t sda, uint8_t scl, int x, int y, int r, int c);
 
-} // namespace asdl
+} // namespace arduino_sdl

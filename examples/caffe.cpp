@@ -158,6 +158,7 @@ int main(void)
     arduino_sdl::connect_button(BUTTON_PINS[0], 100, 100);
     arduino_sdl::connect_button(BUTTON_PINS[1], 100, 200);
     arduino_sdl::connect_button(BUTTON_PINS[2], 150, 150);
+    arduino_sdl::connect_lcd(0x27, A4, A5, 200, 200, 3, 3);
     arduino_sdl::loop();
     arduino_sdl::quit();
     return 0;

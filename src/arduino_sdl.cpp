@@ -427,10 +427,37 @@ LiquidCrystal_I2C::LiquidCrystal_I2C(uint8_t addr, uint8_t cols, uint8_t rows)
     : addr{addr}, cols{cols}, rows{rows}
 { }
 
+/* Technically I should be implementing and using the I2C protocol here.
+ * Unfortunately, for ease of development, and because I need to finish this
+ * quickly, I am not interested in doing so.
+ *
+ * Instead, I have implemented a very simple protocol here. The LCD will work with commands:
+ * first, write the command byte, then write the data.
+ * The commands for the LCD are:
+ * 0: backlight (1 byte)
+ * 1: write character (1 byte)
+ * 2: set cursor (2 bytes)
+ * 3: clear (0 bytes)
+ */
 void LiquidCrystal_I2C::init() {}
-void LiquidCrystal_I2C::backlight() {}
+
+void LiquidCrystal_I2C::backlight()
+{
+    // Wire.beginTransmission(addr);
+    // Wire.write(0);
+    // Wire.write(1);
+    // Wire.endTransmission();
+}
+
 void LiquidCrystal_I2C::clear() {}
-void LiquidCrystal_I2C::setCursor(int x, int y) {}
+
+void LiquidCrystal_I2C::setCursor(uint8_t x, uint8_t y)
+{
+    // Wire.beginTransmission(addr);
+    // Wire.write(0x80);
+    // Wire.endTransmission();
+}
+
 void LiquidCrystal_I2C::print(String s) {}
 
 
