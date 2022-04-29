@@ -13,6 +13,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <glm/glm.hpp>
+#include <fmt/core.h>
 #include "arduino_sdl.h"
 #include "Wire.h"
 #include "LiquidCrystal_I2C.h"
@@ -26,6 +27,8 @@ struct Rect {
     vec2 pos;
     vec2 size;
 };
+
+_wire Wire;
 
 bool collision_rect_point(Rect r, vec2 p)
 {
@@ -312,13 +315,50 @@ struct Potentiometer : public Component {
 struct LCD : public Component {
     vec2 pos, size;
     uint8_t sda, scl;
-    std::vector<char> char_buf;
+    std::vector<char> char_vec;
+    int char_write_count = 0;
+    int cmd_write_count  = 0;
+    uint8_t char_buf = 0;
+    uint8_t cmd_buf  = 0;
 
     LCD(vec2 pos, vec2 size, uint8_t addr, uint8_t sda, uint8_t scl)
         : pos{pos}, size{size}, sda{sda}, scl{scl}
     {
-        board.add_i2c(addr, [&](uint8_t val) {});
-        char_buf = std::vector(size.x * size.y, '1');
+        board.add_i2c(addr, [&](uint8_t val) {
+            if (val & 1)
+                write_char(val);
+            else
+                command(val);
+        });
+        char_vec = std::vector(size.x * size.y, '1');
+    }
+
+    void command(uint8_t val)
+    {
+        if (cmd_write_count == 0 && (val & 0xf0) == 0) {
+            fmt::print("set backlight\n");
+            fmt::print("is this a backlight command? val = {:02X} {:08b}\n", val, val);
+            return;
+        }
+        fmt::print("received command, val = {:02X} {:08b}, count = {}\n", val, val, cmd_write_count);
+        cmd_buf |= cmd_write_count == 0 ?  val & 0xf0
+                 : cmd_write_count == 3 ? (val & 0xf0) >> 4
+                 : cmd_buf;
+        if (++cmd_write_count == 6) {
+            fmt::print("got command {:02X}\n", cmd_buf);
+            cmd_buf = cmd_write_count = 0;
+        }
+    }
+
+    void write_char(uint8_t val)
+    {
+        char_buf |= char_write_count == 0 ?  val & 0xf0
+                  : char_write_count == 3 ? (val & 0xf0) >> 4
+                  : char_buf;
+        if (++char_write_count == 6) {
+            fmt::print("wrote character {}\n", (char) char_buf);
+            char_buf = char_write_count = 0;
+        }
     }
 
     int  digital_read(uint8_t)                 override { return 0; }
@@ -349,10 +389,11 @@ struct LCD : public Component {
         // draw lcd text
         for (auto y = 0u; y < size.y; y++) {
             for (auto x = 0u; x < size.x; x++) {
-                draw_character(pos + vec2{x+1,y+1} * 32.f, char_buf[y * size.x + x]);
+                draw_character(pos + vec2{x+1,y+1} * 32.f, char_vec[y * size.x + x]);
             }
         }
     }
+
 };
 
 
@@ -382,6 +423,11 @@ void delay(unsigned long ms)
     poll();
     draw();
     SDL_Delay(ms);
+}
+
+void delayMicroseconds(unsigned long us)
+{
+    delay(us / 1000);
 }
 
 void attachInterrupt(uint8_t interruptNum, void (*userFunc)(void), int mode) {}
@@ -414,52 +460,39 @@ long map(long x, long in_min, long in_max, long out_min, long out_max)
 
 /* Wire stuff */
 
+void _wire::beginTransmission(uint8_t addr)
+{
+    // fmt::print("beginning transmission\n");
+    cur_addr = addr;
+}
+
+void _wire::endTransmission()
+{
+    // fmt::print("ending transmission\n");
+    cur_addr = 0;
+}
+
 void _wire::write(uint8_t data)
 {
+    // fmt::print("writing {} ({:02X}, {:08b}) to {:X}\n", data, data, data, cur_addr);
     board.i2c_bus[cur_addr](data);
 }
 
 
 
-/* LiquidCrystal_I2C stuff */
+/* Print stuff */
 
-LiquidCrystal_I2C::LiquidCrystal_I2C(uint8_t addr, uint8_t cols, uint8_t rows)
-    : addr{addr}, cols{cols}, rows{rows}
-{ }
-
-/* Technically I should be implementing and using the I2C protocol here.
- * Unfortunately, for ease of development, and because I need to finish this
- * quickly, I am not interested in doing so.
- *
- * Instead, I have implemented a very simple protocol here. The LCD will work with commands:
- * first, write the command byte, then write the data.
- * The commands for the LCD are:
- * 0: backlight (1 byte)
- * 1: write character (1 byte)
- * 2: set cursor (2 bytes)
- * 3: clear (0 bytes)
- */
-void LiquidCrystal_I2C::init() {}
-
-void LiquidCrystal_I2C::backlight()
+size_t Print::write(const uint8_t *buffer, size_t size)
 {
-    // Wire.beginTransmission(addr);
-    // Wire.write(0);
-    // Wire.write(1);
-    // Wire.endTransmission();
+    size_t n = 0;
+    while (size--) {
+        if (write(*buffer++))
+            n++;
+        else
+            break;
+    }
+    return n;
 }
-
-void LiquidCrystal_I2C::clear() {}
-
-void LiquidCrystal_I2C::setCursor(uint8_t x, uint8_t y)
-{
-    // Wire.beginTransmission(addr);
-    // Wire.write(0x80);
-    // Wire.endTransmission();
-}
-
-void LiquidCrystal_I2C::print(String s) {}
-
 
 
 namespace arduino_sdl {

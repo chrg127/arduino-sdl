@@ -27,6 +27,10 @@
 #define FALLING 2
 #define RISING 3
 
+#define B00000100 4
+#define B00000010 2
+#define B00000001 1
+
 #ifdef abs
 #undef abs
 #endif
@@ -77,6 +81,7 @@ void analogWrite(uint8_t pin, uint8_t val);
 
 unsigned long millis();
 void delay(unsigned long ms);
+void delayMicroseconds(unsigned long us);
 
 void attachInterrupt(uint8_t interruptNum, void (*userFunc)(void), int mode);
 void detachInterrupt(uint8_t interruptNum);
