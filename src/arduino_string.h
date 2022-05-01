@@ -15,6 +15,8 @@ public:
 
     unsigned int length() const { return end - start; }
     const char *data() const { return start; }
+    const char *c_str() const { return start; }
+    char *c_str() { return start; }
     void construct(const char *s, unsigned int len);
 };
 

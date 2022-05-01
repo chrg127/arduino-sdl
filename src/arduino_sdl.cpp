@@ -13,6 +13,7 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
 #include <glm/glm.hpp>
+#include <fmt/core.h>
 #include "arduino_sdl.h"
 #include "Wire.h"
 #include "LiquidCrystal_I2C.h"
@@ -312,13 +313,26 @@ struct Potentiometer : public Component {
 struct LCD : public Component {
     vec2 pos, size;
     uint8_t sda, scl;
-    std::vector<char> char_buf;
+    std::vector<char> char_vec;
+    int char_write_count = 0;
+    int cmd_write_count  = 0;
+    uint8_t char_buf = 0;
+    uint8_t cmd_buf  = 0;
 
     LCD(vec2 pos, vec2 size, uint8_t addr, uint8_t sda, uint8_t scl)
         : pos{pos}, size{size}, sda{sda}, scl{scl}
     {
-        board.add_i2c(addr, [&](uint8_t val) {});
-        char_buf = std::vector(size.x * size.y, '1');
+        board.add_i2c(addr, [&](uint8_t val) {
+        });
+        char_vec = std::vector(size.x * size.y, '1');
+    }
+
+    void command(uint8_t val)
+    {
+    }
+
+    void write_char(uint8_t val)
+    {
     }
 
     int  digital_read(uint8_t)                 override { return 0; }
@@ -349,10 +363,11 @@ struct LCD : public Component {
         // draw lcd text
         for (auto y = 0u; y < size.y; y++) {
             for (auto x = 0u; x < size.x; x++) {
-                draw_character(pos + vec2{x+1,y+1} * 32.f, char_buf[y * size.x + x]);
+                draw_character(pos + vec2{x+1,y+1} * 32.f, char_vec[y * size.x + x]);
             }
         }
     }
+
 };
 
 
@@ -382,6 +397,11 @@ void delay(unsigned long ms)
     poll();
     draw();
     SDL_Delay(ms);
+}
+
+void delayMicroseconds(unsigned long us)
+{
+    delay(us / 1000);
 }
 
 void attachInterrupt(uint8_t interruptNum, void (*userFunc)(void), int mode) {}
@@ -414,9 +434,27 @@ long map(long x, long in_min, long in_max, long out_min, long out_max)
 
 /* Wire stuff */
 
+_wire Wire;
+
 void _wire::write(uint8_t data)
 {
     board.i2c_bus[cur_addr](data);
+}
+
+
+
+/* Print stuff */
+
+size_t Print::write(const uint8_t *buffer, size_t size)
+{
+    size_t n = 0;
+    while (size--) {
+        if (write(*buffer++))
+            n++;
+        else
+            break;
+    }
+    return n;
 }
 
 
@@ -441,24 +479,28 @@ LiquidCrystal_I2C::LiquidCrystal_I2C(uint8_t addr, uint8_t cols, uint8_t rows)
  */
 void LiquidCrystal_I2C::init() {}
 
-void LiquidCrystal_I2C::backlight()
+void LiquidCrystal_I2C::command(uint8_t cmd, uint8_t data)
 {
-    // Wire.beginTransmission(addr);
-    // Wire.write(0);
-    // Wire.write(1);
-    // Wire.endTransmission();
+    Wire.beginTransmission();
+    Wire.write(cmd);
+    Wire.write(data);
+    Wire.endTransmission();
 }
 
-void LiquidCrystal_I2C::clear() {}
+void LiquidCrystal_I2C::backlight()   { command(1, 1); }
+void LiquidCrystal_I2C::noBacklight() { command(1, 0); }
+void LiquidCrystal_I2C::clear()       { command(2, 0); }
 
 void LiquidCrystal_I2C::setCursor(uint8_t x, uint8_t y)
 {
-    // Wire.beginTransmission(addr);
-    // Wire.write(0x80);
-    // Wire.endTransmission();
+    command(3, 0);
 }
 
-void LiquidCrystal_I2C::print(String s) {}
+size_t LiquidCrystal_I2C::write(uint8_t data)
+{
+    command(0, data);
+    return 1;
+}
 
 
 
