@@ -11,12 +11,17 @@
 #include <unordered_map>
 #include <utility>
 #include <SDL2/SDL.h>
-#include <SDL2/SDL_ttf.h>
 #include <glm/glm.hpp>
 #include <fmt/core.h>
 #include "arduino_sdl.h"
+#include "arduino_string.h"
 #include "Wire.h"
+#include "Print.h"
 #include "LiquidCrystal_I2C.h"
+
+
+
+/* constants, typedefs, etc. */
 
 #define FWD(...) std::forward<decltype(__VA_ARGS__)>(__VA_ARGS__)
 
@@ -27,6 +32,18 @@ struct Rect {
     vec2 pos;
     vec2 size;
 };
+
+// NOTE: remember to sync these with the load_gfx function
+enum {
+    TEXTURE_BUTTON,
+    TEXTURE_POTENTIOMETER,
+    TEXTURE_LCD,
+    TEXTURE_FONT,
+};
+
+
+
+/* utility functions for rendering */
 
 bool collision_rect_point(Rect r, vec2 p)
 {
@@ -67,12 +84,12 @@ u32 lerp_rgba(u32 min, u32 max, float t)
 }
 
 
-enum {
-    TEXTURE_BUTTON,
-    TEXTURE_POTENTIOMETER,
-    TEXTURE_LCD,
-    TEXTURE_FONT,
-};
+
+/*
+ * component and board declarations.
+ * all these classes are intentionally written to have as few methods
+ * as possible.
+ */
 
 struct Component {
     virtual int  digital_read(uint8_t pin) = 0;
@@ -143,6 +160,11 @@ struct {
 
 
 
+/*
+ * Some more utility functions. In particular, poll() is used to poll OS events,
+ * load_gfx loads texture from BMP files, while the others are rendering 'primitives'.
+ */
+
 namespace {
 
 void poll()
@@ -172,6 +194,15 @@ void poll()
             break;
         }
     }
+}
+
+int load_gfx(std::string_view pathname, vec2 frame_size)
+{
+    auto *bmp = SDL_LoadBMP(pathname.data());
+    assert(bmp && "load of bmp image failed");
+    auto *tex = SDL_CreateTextureFromSurface(SDL.rd, bmp);
+    SDL_FreeSurface(bmp);
+    return gfx_handler.add((Texture) { .data = tex, .size = frame_size, .image_size = {bmp->w, bmp->h} });
 }
 
 void draw_frame(vec2 pos, int gfx_id, int frame)
@@ -211,18 +242,12 @@ void draw()
     SDL_RenderPresent(SDL.rd);
 }
 
-int load_gfx(std::string_view pathname, vec2 frame_size)
-{
-    auto *bmp = SDL_LoadBMP(pathname.data());
-    assert(bmp && "load of bmp image failed");
-    auto *tex = SDL_CreateTextureFromSurface(SDL.rd, bmp);
-    SDL_FreeSurface(bmp);
-    return gfx_handler.add((Texture) { .data = tex, .size = frame_size, .image_size = {bmp->w, bmp->h} });
-}
-
 } // namespace
 
 
+
+
+/* Definitions for all components */
 
 struct LED : public Component {
     vec2 pos;
@@ -232,8 +257,11 @@ struct LED : public Component {
 
     explicit LED(vec2 pos, u32 min, u32 max) : pos{pos}, color_min{min}, color_max{max} {}
     int  digital_read(uint8_t)                 override { return 0; }
-    // assume we only pass LOW (0) or HIGH (1) to digital_write
-    void digital_write(uint8_t, uint8_t value) override { val = value * 255; }
+    void digital_write(uint8_t, uint8_t value) override
+    {
+        // This should always be safe as long user programs only use LOW and HIGH
+        val = value * 255;
+    }
     int  analog_read(uint8_t)                  override { return 0; }
     void analog_write(uint8_t, uint8_t value)  override { val = value; }
     void mouse_click(vec2 mouse_pos, bool pressed)  override { }
@@ -287,7 +315,6 @@ struct Potentiometer : public Component {
         if (inside) {
             value += (up_or_down ? 1 : -1) * 64;
             value = value > 1023 ? 1023 : value < 0 ? 0 : value;
-            // frame = value / 128;
         }
     }
 
@@ -320,27 +347,24 @@ struct LCD : public Component {
         : pos{pos}, size{size}, sda{sda}, scl{scl}
     {
         board.add_i2c(addr, [&](uint8_t val) {
-            // receive 2 bytes (cmd, data)
-            // see comment for LiquidCrystal_I2C stuff below
+            // Receive 2 bytes (cmd, data), then handle them
+            // See comment for LiquidCrystal_I2C stuff below for details.
             buf[idx++] = val;
             if (idx == 2) {
                 idx = 0;
-                command(buf[0], buf[1]);
+                switch (buf[0]) {
+                case 0: char_vec[addr++] = buf[1];                        break;
+                case 1: backlight = bool(buf[1]);                         break;
+                case 2: std::fill(char_vec.begin(), char_vec.end(), ' '); break;
+                case 3: addr = buf[1];                                    break;
+                }
             }
         });
         char_vec = std::vector(size.x * size.y, uint8_t('1'));
     }
 
-    void command(uint8_t cmd, uint8_t data)
-    {
-        switch (cmd) {
-        case 0: char_vec[addr++] = data;                          break;
-        case 1: backlight = bool(data);                           break;
-        case 2: std::fill(char_vec.begin(), char_vec.end(), ' '); break;
-        case 3: addr = data;                                      break;
-        }
-    }
-
+    // Registering the LCD as a Component is useless, but we still need to occupy
+    // the pins it needs, so here we go
     int  digital_read(uint8_t)                 override { return 0; }
     void digital_write(uint8_t, uint8_t value) override { }
     int  analog_read(uint8_t)                  override { return 0; }
@@ -351,6 +375,7 @@ struct LCD : public Component {
 
     void draw() override
     {
+        // Draw LCD borders
         draw_frame(pos,                                   TEXTURE_LCD, 0);
         draw_frame(pos + vec2{size.x+1,        0} * 32.f, TEXTURE_LCD, 1);
         draw_frame(pos + vec2{       0, size.y+1} * 32.f, TEXTURE_LCD, 2);
@@ -366,26 +391,23 @@ struct LCD : public Component {
             draw_frame(pos + vec2{size.x+1, i+1} * 32.f, TEXTURE_LCD, 7);
         }
 
-        // draw lcd text
-        for (auto y = 0u; y < size.y; y++) {
-            for (auto x = 0u; x < size.x; x++) {
+        // Draw LCD text
+        for (auto y = 0u; y < size.y; y++)
+            for (auto x = 0u; x < size.x; x++)
                 draw_character(pos + vec2{x+1,y+1} * 32.f, char_vec[y * size.x + x]);
-            }
-        }
     }
-
 };
 
 
 
-/* the stuff defined in the header file start here */
+/* Arduino functions, i.e. the stuff defined in the header files */
+
+HardwareSerial Serial;
 
 void HardwareSerial::begin(int n) { }
 void HardwareSerial::println(const String &msg) { printf("%s\n", msg.data()); }
 void HardwareSerial::println(const char *msg)   { printf("%s\n", msg); }
 void HardwareSerial::println(int n)             { printf("%d\n", n); }
-
-HardwareSerial Serial;
 
 void pinMode(uint8_t pin, uint8_t value) { }
 int digitalRead(uint8_t pin)                  { return board.components[board.ports[pin]]->digital_read(pin); }
@@ -410,6 +432,7 @@ void delayMicroseconds(unsigned long us)
     delay(us / 1000);
 }
 
+// (I will implement this if I ever need to use interrupts)
 void attachInterrupt(uint8_t interruptNum, void (*userFunc)(void), int mode) {}
 void detachInterrupt(uint8_t interruptNum) {}
 
@@ -438,7 +461,40 @@ long map(long x, long in_min, long in_max, long out_min, long out_max)
 
 
 
-/* Wire stuff */
+/* String functions */
+
+String::String(int n, int base)
+{
+    start = new char[1024];
+    end = start + 1024;
+    memset(start, 0, 1024);
+    auto err = std::to_chars(start, end, n, base);
+    if (err.ec != std::errc())
+        fprintf(stderr, "warning: couldn't convert %d to string\n", n);
+}
+
+void String::construct(const char *s, unsigned int len)
+{
+    start = new char[len];
+    std::memcpy(start, s, len);
+    end = start + len;
+    end[-1] = '\0';
+}
+
+String String::concat(const char *a, size_t la, const char *b, size_t lb)
+{
+    char *r = new char[la + lb + 1];
+    std::memcpy(r, a, la);
+    std::memcpy(r + la, b, lb);
+    r[la+lb] = '\0';
+    String s;
+    s.construct(r, la+lb+1);
+    return s;
+}
+
+
+
+/* Wire.h functions */
 
 _wire Wire;
 
@@ -449,7 +505,7 @@ void _wire::write(uint8_t data)
 
 
 
-/* Print stuff */
+/* Print.h functions */
 
 size_t Print::write(const uint8_t *buffer, size_t size)
 {
@@ -465,7 +521,7 @@ size_t Print::write(const uint8_t *buffer, size_t size)
 
 
 
-/* LiquidCrystal_I2C stuff */
+/* LiquidCrystal_I2C functions */
 
 /* Technically I should be implementing and using the I2C protocol here.
  * Unfortunately, for ease of development, and because I need to finish this
