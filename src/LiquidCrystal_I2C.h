@@ -3,8 +3,6 @@
 #include <cstdint>
 #include <Print.h>
 
-#define LCD_SETDDRAMADDR 0x80
-
 class LiquidCrystal_I2C : public Print {
     uint8_t addr, cols, rows;
 

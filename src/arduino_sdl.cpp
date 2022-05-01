@@ -183,7 +183,7 @@ void draw_frame(vec2 pos, int gfx_id, int frame)
     SDL_RenderCopy(SDL.rd, tex.data, &src, &dst);
 }
 
-void draw_character(vec2 pos, char c)
+void draw_character(vec2 pos, uint8_t c)
 {
     int x = int(c) % 16;
     int y = int(c) / 16;
@@ -191,9 +191,6 @@ void draw_character(vec2 pos, char c)
     SDL_Rect src = {     x * 32,     y * 32, 32, 32 };
     SDL_Rect dst = { int(pos.x), int(pos.y), 32, 32 };
     SDL_RenderCopy(SDL.rd, tex.data, &src, &dst);
-    // SDL_SetRenderDrawColor(SDL.rd, 0xff, 0, 0, 0xff);
-    // SDL_Rect r = { int(pos.x), int(pos.y), 32, 32 };
-    // SDL_RenderDrawRect(SDL.rd, &r);
 }
 
 void draw_circle(vec2 pos, float radius, unsigned color)
@@ -313,26 +310,35 @@ struct Potentiometer : public Component {
 struct LCD : public Component {
     vec2 pos, size;
     uint8_t sda, scl;
-    std::vector<char> char_vec;
-    int char_write_count = 0;
-    int cmd_write_count  = 0;
-    uint8_t char_buf = 0;
-    uint8_t cmd_buf  = 0;
+    std::vector<uint8_t> char_vec;
+    uint8_t addr = 0;
+    uint8_t buf[2];
+    uint8_t idx = 0;
+    bool backlight = false;
 
     LCD(vec2 pos, vec2 size, uint8_t addr, uint8_t sda, uint8_t scl)
         : pos{pos}, size{size}, sda{sda}, scl{scl}
     {
         board.add_i2c(addr, [&](uint8_t val) {
+            // receive 2 bytes (cmd, data)
+            // see comment for LiquidCrystal_I2C stuff below
+            buf[idx++] = val;
+            if (idx == 2) {
+                idx = 0;
+                command(buf[0], buf[1]);
+            }
         });
-        char_vec = std::vector(size.x * size.y, '1');
+        char_vec = std::vector(size.x * size.y, uint8_t('1'));
     }
 
-    void command(uint8_t val)
+    void command(uint8_t cmd, uint8_t data)
     {
-    }
-
-    void write_char(uint8_t val)
-    {
+        switch (cmd) {
+        case 0: char_vec[addr++] = data;                          break;
+        case 1: backlight = bool(data);                           break;
+        case 2: std::fill(char_vec.begin(), char_vec.end(), ' '); break;
+        case 3: addr = data;                                      break;
+        }
     }
 
     int  digital_read(uint8_t)                 override { return 0; }
@@ -461,10 +467,6 @@ size_t Print::write(const uint8_t *buffer, size_t size)
 
 /* LiquidCrystal_I2C stuff */
 
-LiquidCrystal_I2C::LiquidCrystal_I2C(uint8_t addr, uint8_t cols, uint8_t rows)
-    : addr{addr}, cols{cols}, rows{rows}
-{ }
-
 /* Technically I should be implementing and using the I2C protocol here.
  * Unfortunately, for ease of development, and because I need to finish this
  * quickly, I am not interested in doing so.
@@ -472,16 +474,20 @@ LiquidCrystal_I2C::LiquidCrystal_I2C(uint8_t addr, uint8_t cols, uint8_t rows)
  * Instead, I have implemented a very simple protocol here. The LCD will work with commands:
  * first, write the command byte, then write the data.
  * The commands for the LCD are:
- * 0: backlight (1 byte)
- * 1: write character (1 byte)
- * 2: set cursor (2 bytes)
- * 3: clear (0 bytes)
+ * 0: write char
+ * 1: backlight
+ * 2: clear
+ * 3: set cursor
  */
+LiquidCrystal_I2C::LiquidCrystal_I2C(uint8_t addr, uint8_t cols, uint8_t rows)
+    : addr{addr}, cols{cols}, rows{rows}
+{ }
+
 void LiquidCrystal_I2C::init() {}
 
 void LiquidCrystal_I2C::command(uint8_t cmd, uint8_t data)
 {
-    Wire.beginTransmission();
+    Wire.beginTransmission(addr);
     Wire.write(cmd);
     Wire.write(data);
     Wire.endTransmission();
@@ -491,9 +497,11 @@ void LiquidCrystal_I2C::backlight()   { command(1, 1); }
 void LiquidCrystal_I2C::noBacklight() { command(1, 0); }
 void LiquidCrystal_I2C::clear()       { command(2, 0); }
 
-void LiquidCrystal_I2C::setCursor(uint8_t x, uint8_t y)
+void LiquidCrystal_I2C::setCursor(uint8_t col, uint8_t row)
 {
-    command(3, 0);
+    if (row >= rows)
+		row =  rows-1;
+    command(3, row * cols + col);
 }
 
 size_t LiquidCrystal_I2C::write(uint8_t data)
@@ -541,9 +549,9 @@ void connect_led(int pin, int x, int y, u32 min, u32 max) { connect_component<LE
 void connect_button(int pin, int x, int y)              { connect_component<Button>(pin, vec2{x,y}); }
 void connect_potentiometer(int pin, int x, int y)       { connect_component<Potentiometer>(pin, vec2{x,y}); }
 
-void connect_lcd(uint8_t addr, uint8_t sda, uint8_t scl, int x, int y, int r, int c)
+void connect_lcd(uint8_t addr, uint8_t sda, uint8_t scl, int c, int r, int x, int y)
 {
-    int i = board.push_component<LCD>(vec2{x, y}, vec2{r, c}, addr, sda, scl);
+    int i = board.push_component<LCD>(vec2{x, y}, vec2{c, r}, addr, sda, scl);
     board.ports[sda] = i;
     board.ports[scl] = i;
 }
