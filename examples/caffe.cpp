@@ -1,7 +1,5 @@
 #include <LiquidCrystal_I2C.h>
 
-#include "arduino_sdl.h"
-
 enum class State {
     Welcome,
     Ready,
@@ -11,13 +9,13 @@ enum class State {
     Sleep,
 };
 
-const int MS = 1000;
-const int TIME_MAKING   = 10 * MS;
-const int TIME_TIMEOUT  = 5 * MS;
-const int TIME_IDLE     = 60 * MS;
-const int TIME_CHECK    = 180 * MS;
-const int TEMP_MIN      = 17;
-const int TEMP_MAX      = 24;
+const unsigned long MS = 1000;
+const unsigned long TIME_MAKING   = 10 * MS;
+const unsigned long TIME_TIMEOUT  = 5 * MS;
+const unsigned long TIME_IDLE     = 60 * MS;
+const unsigned long TIME_CHECK    = 180 * MS;
+const unsigned long TEMP_MIN      = 17;
+const unsigned long TEMP_MAX      = 24;
 
 // pot          - regolare sugar
 // 3 buttons    - Bup, Bdown selects products, Bmake starts making coffee
@@ -27,11 +25,11 @@ const int TEMP_MAX      = 24;
 // servo        - simulate machine movements
 // temp sensor  - temperature
 
-const int BUTTON_PINS[] = { 0, 1, 2 };
+const int BUTTON_PINS[] = { 8, 9, 10 };
 const int SONAR_ECHO_PIN = 3;
 const int SONAR_TRIG_PIN = 4;
 const int SERVO_PIN = 5;
-const int PIR_PIN = 9;
+const int PIR_PIN = 11;
 
 const int POT_PIN = A0;
 const int TEMP_PIN = A1;
@@ -76,6 +74,8 @@ struct Machine {
             p = MAX_PRODUCTS;
         cur_product = 0;
     }
+
+    int get_cur() const { return abs(cur_product % 3); }
 } machine;
 
 void setup() {
@@ -87,6 +87,7 @@ void setup() {
     pinMode(PIR_PIN, INPUT);
     Serial.begin(9600);
     lcd.init();
+    lcd.backlight();
     state_machine.state_start = 0;
     state_machine.state = State::Welcome;
 }
@@ -98,23 +99,61 @@ void lcd_write(String s)
     lcd.print(s);
 }
 
-bool button_pressed(int idx) { return digitalRead(BUTTON_PINS[idx]) == HIGH; }
-
 void welcome() {
     lcd_write("fox");
+    
+        Serial.println("time = " + String(state_machine.time()));
     if (state_machine.time() > 1000) {
         machine.init();
         state_machine.start(State::Ready);
     }
 }
 
+
+
+const int BUTTON_SELECT_INC = 0;
+const int BUTTON_SELECT_DEC = 0;
+const int BUTTON_CONSUME = 0;
+
+/*
+struct {
+    bool pressed[3];
+    bool just_pressed[3];
+    bool just_released[3];
+  
+    void poll() {
+        
+    }
+} button_handler;
+*/
+
+struct {
+    bool been_pressed = false;
+    int last_press = 0;
+
+    bool pressed(int i) {
+
+        if(been_pressed && digitalRead(BUTTON_PINS[last_press]) == LOW){
+          been_pressed = false;
+          return false;
+        }
+        
+        if (!been_pressed && digitalRead(BUTTON_PINS[i]) == HIGH) {
+            been_pressed = true;
+            last_press = i;
+            return true;
+        }
+        return false;
+    }
+} button_handler;
+
 bool button_checker(int n) {
     static String product_string[] = { "Coffee", "Chocolate", "Tea" };
-    if (button_pressed(n)) {
+    if (button_handler.pressed(n)) {
         int inc = n == 0 ? 1 : -1;
-        machine.cur_product = (machine.cur_product + inc) % 3;
-        lcd_write(String("Selected") + product_string[machine.cur_product]);
-        delay(36);
+        machine.cur_product += inc;
+        lcd_write(String("Selected ") + product_string[machine.get_cur()]);
+        delay(100);
         return true;
     }
     return false;
@@ -123,31 +162,41 @@ bool button_checker(int n) {
 bool detect_users() { return true; }
 
 void ready() {
+    Serial.println("on ready state, cur_product = " + String(machine.cur_product));
     static int button_time = 0;
-
-    if (button_time <= 0)
-        lcd_write("ready");
-
-    button_time = button_checker(0) || button_checker(1) ? 5000 : (button_time > 0 ? button_time - 10 : 0);
 
     if (detect_users())
         state_machine.last_pir_trig = millis();
     if (millis() - state_machine.last_pir_trig > TIME_IDLE)
         state_machine.start(State::Sleep);
 
-    if (button_pressed(2)) {
+    if (button_time <= 0)
+        lcd_write("ready");
+
+    button_time = button_checker(0) || button_checker(1) ? 5000 : (button_time > 0 ? button_time - 10 : 0);
+
+    if (button_handler.pressed(2)) {
         state_machine.start(State::MakingProduct);
     }
 }
 
+void making_product() {
+  
+  Serial.println("consumer");
+}
+
+void machine_sleep() {
+  Serial.println("sleeping");
+}
+
 void loop() {
     switch (state_machine.state) {
-    case State::Welcome:            welcome(); break;
-    case State::Ready: break;
-    case State::MakingProduct: break;
+    case State::Welcome:          welcome(); break;
+    case State::Ready:            ready(); break;
+    case State::MakingProduct:    making_product(); break;
     case State::ProductReady: break;
     case State::Assistance: break;
-    case State::Sleep: break;
+    case State::Sleep:            machine_sleep(); break;
     }
     delay(10);
 }
@@ -158,7 +207,7 @@ int main(void)
     arduino_sdl::connect_button(BUTTON_PINS[0], 100, 100);
     arduino_sdl::connect_button(BUTTON_PINS[1], 100, 200);
     arduino_sdl::connect_button(BUTTON_PINS[2], 150, 150);
-    arduino_sdl::connect_lcd(0x27, A4, A5, 200, 200, 3, 3);
+    arduino_sdl::connect_lcd(0x27, A4, A5, 16, 2, 200, 200);
     arduino_sdl::loop();
     arduino_sdl::quit();
     return 0;
