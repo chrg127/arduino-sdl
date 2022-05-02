@@ -339,28 +339,34 @@ struct LCD : public Component {
     uint8_t sda, scl;
     std::vector<uint8_t> char_vec;
     uint8_t addr = 0;
-    uint8_t buf[2];
+    uint8_t buf[2] = {0, 0};
     uint8_t idx = 0;
     bool backlight = false;
 
     LCD(vec2 pos, vec2 size, uint8_t addr, uint8_t sda, uint8_t scl)
         : pos{pos}, size{size}, sda{sda}, scl{scl}
     {
+        char_vec = std::vector(size.x * size.y, uint8_t('1'));
         board.add_i2c(addr, [&](uint8_t val) {
             // Receive 2 bytes (cmd, data), then handle them
             // See comment for LiquidCrystal_I2C stuff below for details.
             buf[idx++] = val;
             if (idx == 2) {
                 idx = 0;
-                switch (buf[0]) {
-                case 0: char_vec[addr++] = buf[1];                        break;
-                case 1: backlight = bool(buf[1]);                         break;
-                case 2: std::fill(char_vec.begin(), char_vec.end(), ' '); break;
-                case 3: addr = buf[1];                                    break;
-                }
+                command(buf[0], buf[1]);
             }
         });
-        char_vec = std::vector(size.x * size.y, uint8_t('1'));
+    }
+
+    void command(uint8_t cmd, uint8_t data)
+    {
+        switch (cmd) {
+        case 0: char_vec[addr++] = data;                          break;
+        case 1: backlight = bool(data);                           break;
+        case 2: std::fill(char_vec.begin(), char_vec.end(), ' '); break;
+        case 3: addr = data;                                      break;
+        default: fmt::print(stderr, "LCD: unknown command\n");    break;
+        }
     }
 
     // Registering the LCD as a Component is useless, but we still need to occupy
